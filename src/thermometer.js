@@ -66,9 +66,9 @@ class Thermometer {
 
   // Read the current temperature (supports sync or Promise) and check thresholds
   async readTemperature() {
-    let value;
+    this.previousTemp = this.currentTemp;
     try {
-      value = await Promise.resolve(this.source());
+      this.currentTemp = await Promise.resolve(this.source());
     } catch (error) {
       console.error(
         `Error reading temperature: ${error && error.message ? error.message : error}`
@@ -76,62 +76,61 @@ class Thermometer {
       return null;
     }
 
-    if (typeof value !== "number" || Number.isNaN(value)) {
+    if (typeof this.currentTemp !== "number" || Number.isNaN(this.currentTemp)) {
       throw new Error("Invalid temperature reading: must be a number.");
     }
 
-    this.previousTemp = this.currentTemp;
-    this.currentTemp = value;
+    this.emitter.emit("reading", this.currentTemp);
 
-    // Emit a 'reading' event for any subscribers (and internal check)
-    this.emitter.emit("reading", value);
-
-    // Only run threshold checks if thresholds exist to avoid throwing
     if (this.thresholds.length > 0) {
-      this.checkThresholds(value);
+      this.checkThresholds();
     }
 
-    return value; // Return the current temperature
+    return this.currentTemp;
   }
 
   // Check thresholds and notify listeners if reached
-  checkThresholds(currentTemp) {
+  checkThresholds() {
     if (this.thresholds.length === 0) {
       throw new Error("No thresholds defined");
     }
     for (const threshold of this.thresholds) {
-      const withinMargin =
-        currentTemp <= threshold.alertTemp + threshold.fluctuation &&
-        currentTemp >= threshold.alertTemp - threshold.fluctuation;
-
-      // Check the conditions based on direction
-      if (!threshold.reached && withinMargin) {
-        if (
-          threshold.direction === "down" &&
-          this.previousTemp > threshold.alertTemp
-        ) {
-          threshold.reached = true; // Mark as reached
-          const event = this.createAlertEvent(currentTemp, threshold);
-          this.emitter.emit("threshold", event);
-        } else if (
-          threshold.direction === "up" &&
-          this.previousTemp < threshold.alertTemp
-        ) {
-          threshold.reached = true; // Mark as reached
-          const event = this.createAlertEvent(currentTemp, threshold);
-          this.emitter.emit("threshold", event);
-        } else if (threshold.direction === "both") {
-          threshold.reached = true; // Mark as reached for both directions
-          const event = this.createAlertEvent(currentTemp, threshold);
-          this.emitter.emit("threshold", event);
-        }
-      } else if (threshold.reached && !withinMargin) {
-        threshold.reached = false; // Reset if no longer valid
+      const withinFluctuation = this._isWithinFluctuation(this.currentTemp, threshold);
+      if (!threshold.reached && withinFluctuation && this._isThresholdReached(threshold)) {
+        this._handleThresholdReached(threshold, this.currentTemp);
+      } else if (threshold.reached && !withinFluctuation) {
+        threshold.reached = false;
       }
     }
+    // No need to update previousTemp here; handled in readTemperature
+  }
 
-    // Store previous temperature once after processing all thresholds
-    this.previousTemp = currentTemp;
+  // Helper method to check if the threshold has been reached based on direction
+  _isThresholdReached(threshold) {
+    switch (threshold.direction) {
+      case "down":
+        return this.previousTemp > threshold.alertTemp;
+      case "up":
+        return this.previousTemp < threshold.alertTemp;
+      case "both":
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  // Helper method to handle threshold crossing
+  _handleThresholdReached(threshold, currentTemp) {
+    threshold.reached = true;
+    const event = this.createAlertEvent(currentTemp, threshold);
+    this.emitter.emit("threshold", event);
+  }
+
+  _isWithinFluctuation(currentTemp, threshold) {
+    return (
+      currentTemp <= threshold.alertTemp + threshold.fluctuation &&
+      currentTemp >= threshold.alertTemp - threshold.fluctuation
+    );
   }
 
   // add a new threshold
@@ -158,9 +157,6 @@ class Thermometer {
     return event;
   }
 
-  // Notify registered listeners with an event object; return number notified
-  // legacy `notifyListeners` removed in favor of EventEmitter
-
   // EventEmitter convenience wrappers
   on(eventName, listener) {
     this.emitter.on(eventName, listener);
@@ -175,7 +171,6 @@ class Thermometer {
 
 // export classes for testing and external use
 export { Thermometer, Threshold, externalTemperatureSource };
-
 
 // Example/demo runner (does not execute on import)
 export async function runDemo() {
