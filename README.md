@@ -1,4 +1,39 @@
 # thermometer
+
+## Quick Usage
+
+Run the demo (uses the event-driven API):
+
+```bash
+node -e "import('./thermometer.js').then(m=>m.runDemo())"
+```
+
+Programmatic usage (ES modules):
+
+```javascript
+import { Thermometer, Threshold, externalTemperatureSource } from './thermometer.js';
+
+const therm = new Thermometer(externalTemperatureSource);
+
+// subscribe to raw readings
+therm.on('reading', v => console.log('reading', v));
+
+// subscribe to threshold events
+therm.on('threshold', evt => console.log('threshold', evt));
+
+// subscribe to threshold events (preferred)
+therm.on('threshold', evt => console.log('threshold', evt));
+
+await therm.readTemperature(); // reads + emits
+```
+
+Run tests:
+
+```bash
+npm test
+```
+
+
 wizards full stack engineer take home test thermometer
 
 Design and implement  a thermometer class or classes that read the temperature of some external source. 
@@ -57,4 +92,6 @@ Prevents repeated notifications	✔️
 Allows directional notifications	✔️
 
 Overall, the design and implementation of the provided code successfully fulfill all the specified requirements for the thermometer class. The code is flexible, allowing for modifications as needed, and is well-suited for practical applications involving temperature monitoring and alerts.
+
+
 

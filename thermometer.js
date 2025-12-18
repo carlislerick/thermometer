@@ -1,130 +1,216 @@
 // Simulated external temperature source (fluctuating around 0°C)
-const externalTemperatureSource = (() => {
-    // testing for freezing point both up and down
-    const readings = [1.5, 1.0, 0.5, 0.0, -0.5, 0.0, -0.5, 0.0, 0.5, 0.0];
-    // testing for boiling point both up and down
-    // const readings = [90, 95, 99, 100, 100.5, 100, 99, 100, 110, 100];
+import { EventEmitter } from "events";
 
-    let i = 0;
-    return () => readings[i++ % readings.length];
+const externalTemperatureSource = (() => {
+  // testing for freezing point both up and down
+  const readings = [1.5, 1.0, 0.5, 0.0, -0.5, 0.0, -0.5, 0.0, 0.5, 0.0];
+  // testing for boiling point both up and down
+  // const readings = [90, 95, 99, 100, 100.5, 100, 99, 100, 110, 100];
+
+  let i = 0;
+  return () => readings[i++ % readings.length];
 })();
 
 class Threshold {
-    constructor(tempC, margin, direction) {
-        const validDirections = ["up", "down", "both"];
+  constructor(alertTemp, fluctuation, direction) {
+    const validDirections = ["up", "down", "both"];
 
-        // error checking
-        if (typeof tempC !== "number") {
-            throw new Error("Invalid temperature: must be a number.");
-        }
-        if (typeof margin !== "number") {
-            throw new Error("Invalid margin: must be a number.");
-        }
-        if (!validDirections.includes(direction)) {
-            throw new Error(`Invalid direction: must be one of ${validDirections.join(", ")}.`);
-        }
-
-        this.tempC = tempC;   // Threshold temperature in Celsius
-        this.margin = margin;  // Margin for fluctuations
-        this.direction = direction; // "up", "down", or "both"
-        this.reached = false;  // Track if threshold has been reached
-        this.previousTemp = null; // Track the previous temperature
+    // error checking
+    if (typeof alertTemp !== "number") {
+      throw new Error("Invalid alert temperature: must be a number.");
     }
+    if (typeof fluctuation !== "number") {
+      throw new Error("Invalid temperature fluctuation: must be a number.");
+    }
+    if (!validDirections.includes(direction)) {
+      throw new Error(
+        `Invalid direction: must be one of ${validDirections.join(", ")}.`
+      );
+    }
+
+    this.alertTemp = alertTemp; // Threshold temperature in Celsius
+    this.fluctuation = fluctuation; // Margin for fluctuations
+    this.direction = direction; // "up", "down", or "both"
+    this.reached = false; // Track if threshold has been reached
+  }
 }
 
-class Temperature {
-    constructor(externalTemperatureSource, thresholds = []) {
-        this.externalTemperatureSource = externalTemperatureSource; // Function to get temperature
-        this.thresholds = thresholds; // Store thresholds
-        this.listeners = new Set(); // Store listeners in a Set
+class Thermometer {
+  constructor(externalTemperatureSource, thresholds = []) {
+    this.source = externalTemperatureSource; // Function to get temperature (sync or Promise)
+    this.currentTemp = null; // numeric current temperature (Celsius)
+    this.previousTemp = null; // Track the previous temperature (Celsius)
+    this.thresholds = Array.isArray(thresholds) ? thresholds.slice() : []; // Copy of thresholds array if provided
+    // legacy `listeners` removed; use `emitter` for subscriptions
 
-        // Initialize thresholds if provided
-        this.thresholds.forEach(thresh => {
-            if (!(thresh instanceof Threshold)) {
-                throw new Error("Invalid threshold format. Must be an instance of Threshold.");
-            }
-        });
+    // validate threshold
+    this.thresholds.forEach((thresh) => {
+      if (!(thresh instanceof Threshold)) {
+        throw new Error(
+          "Invalid threshold format. Must be an instance of Threshold."
+        );
+      }
+    });
+
+    // Event emitter for decoupled subscriptions
+    this.emitter = new EventEmitter();
+  }
+
+  // Register a listener for notifications
+  // Legacy listener API removed. Use `on('threshold', fn)` instead.
+
+  // Convert Celsius to Fahrenheit
+  toFahrenheit(celsius) {
+    return (celsius * 9) / 5 + 32;
+  }
+
+  // Read the current temperature (supports sync or Promise) and check thresholds
+  async readTemperature() {
+    let value;
+    try {
+      value = await Promise.resolve(this.source());
+    } catch (error) {
+      console.error(
+        `Error reading temperature: ${error && error.message ? error.message : error}`
+      );
+      return null;
     }
 
-    // Register a listener for notifications
-    registerListener(listener) {
-        // Validate listener
-        if (typeof listener !== "function") {
-            throw new Error("Invalid listener: must be a function.");
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      throw new Error("Invalid temperature reading: must be a number.");
+    }
+
+    this.previousTemp = this.currentTemp;
+    this.currentTemp = value;
+
+    // Emit a 'reading' event for any subscribers (and internal check)
+    this.emitter.emit("reading", value);
+
+    // Only run threshold checks if thresholds exist to avoid throwing
+    if (this.thresholds.length > 0) {
+      this.checkThresholds(value);
+    }
+
+    return value; // Return the current temperature
+  }
+
+  // Check thresholds and notify listeners if reached
+  checkThresholds(currentTemp) {
+    if (this.thresholds.length === 0) {
+      throw new Error("No thresholds defined");
+    }
+    for (const threshold of this.thresholds) {
+      const withinMargin =
+        currentTemp <= threshold.alertTemp + threshold.fluctuation &&
+        currentTemp >= threshold.alertTemp - threshold.fluctuation;
+
+      // Check the conditions based on direction
+      if (!threshold.reached && withinMargin) {
+        if (
+          threshold.direction === "down" &&
+          this.previousTemp > threshold.alertTemp
+        ) {
+          threshold.reached = true; // Mark as reached
+          const event = this.createAlertEvent(currentTemp, threshold);
+          this.emitter.emit("threshold", event);
+        } else if (
+          threshold.direction === "up" &&
+          this.previousTemp < threshold.alertTemp
+        ) {
+          threshold.reached = true; // Mark as reached
+          const event = this.createAlertEvent(currentTemp, threshold);
+          this.emitter.emit("threshold", event);
+        } else if (threshold.direction === "both") {
+          threshold.reached = true; // Mark as reached for both directions
+          const event = this.createAlertEvent(currentTemp, threshold);
+          this.emitter.emit("threshold", event);
         }
-        this.listeners.add(listener); // Add to Set
+      } else if (threshold.reached && !withinMargin) {
+        threshold.reached = false; // Reset if no longer valid
+      }
     }
 
-    // Convert Celsius to Fahrenheit
-    toFahrenheit(celsius) {
-        return (celsius * 9/5) + 32;
+    // Store previous temperature once after processing all thresholds
+    this.previousTemp = currentTemp;
+  }
+
+  // add a new threshold
+  addThreshold(alertTemp, fluctuation, direction) {
+    // Support either passing a Threshold instance or numeric args
+    if (alertTemp instanceof Threshold) {
+      this.thresholds.push(alertTemp);
+      return alertTemp;
     }
+    const threshold = new Threshold(alertTemp, fluctuation, direction);
+    this.thresholds.push(threshold);
+    return threshold; // for testing purposes
+  }
 
-    // Read the current temperature and check thresholds
-    readTemperature() {
-        let currentTemp;
-        try {
-            currentTemp = this.externalTemperatureSource();
-            if (typeof currentTemp !== "number") {
-                throw new Error("Invalid temperature reading: must be a number.");
-            }
-        } catch (error) {
-            console.error(`Error reading temperature: ${error.message}`);
-            return null; // Optionally return or handle as needed
-        }
-        
-        this.checkThresholds(currentTemp); // Check against thresholds
-        return currentTemp; // Return the current temperature
-    }
+  // Create an alert event object
+  createAlertEvent(currentTemp, threshold) {
+    const event = {
+      threshold,
+      tempC: currentTemp,
+      tempF: this.toFahrenheit(currentTemp),
+      direction: threshold.direction,
+    };
+    this.lastEvent = event; // helpful for tests
+    return event;
+  }
 
-    // Check thresholds and notify listeners if reached
-    checkThresholds(currentTemp) {
-        for (const threshold of this.thresholds) {
-            const withinMargin = currentTemp <= threshold.tempC + threshold.margin && currentTemp >= threshold.tempC - threshold.margin;
+  // Notify registered listeners with an event object; return number notified
+  // legacy `notifyListeners` removed in favor of EventEmitter
 
-            // Check the conditions based on direction
-            if (!threshold.reached && withinMargin) {
-                if (threshold.direction === "down" && threshold.previousTemp > threshold.tempC) {
-                    threshold.reached = true; // Mark as reached
-                    this.notifyListeners(threshold.tempC, currentTemp);
-                } else if (threshold.direction === "up" && threshold.previousTemp < threshold.tempC) {
-                    threshold.reached = true; // Mark as reached
-                    this.notifyListeners(threshold.tempC, currentTemp);
-                } else if (threshold.direction === "both") {
-                    threshold.reached = true; // Mark as reached for both directions
-                    this.notifyListeners(threshold.tempC, currentTemp);
-                }
-            } else if (threshold.reached && !withinMargin) {
-                threshold.reached = false; // Reset if no longer valid
-            }
-
-            threshold.previousTemp = currentTemp; // Store the previous temperature
-        }
-    }
-
-    // Notify registered listeners, passing both Celsius and Fahrenheit
-    notifyListeners(tempC, currentTemp) {
-        const tempF = this.toFahrenheit(tempC);
-        for (const listener of this.listeners) {
-            listener(tempC, tempF); // Call each listener with both temperatures
-        }
-    }
+  // EventEmitter convenience wrappers
+  on(eventName, listener) {
+    this.emitter.on(eventName, listener);
+  }
+  off(eventName, listener) {
+    this.emitter.off(eventName, listener);
+  }
+  once(eventName, listener) {
+    this.emitter.once(eventName, listener);
+  }
 }
 
-// Example usage
-const freezingThreshold = new Threshold(0, 0.5, "both");   // Freezing point, notify on both directions
-const boilingThreshold = new Threshold(100, 0.5, "both");    // Boiling point, notify on up direction only
+// export classes for testing and external use
+export { Thermometer, Threshold, externalTemperatureSource };
 
-// Create an instance of Temperature with predefined thresholds
-const thermometer = new Temperature(externalTemperatureSource, [freezingThreshold, boilingThreshold]);
 
-// Register a listener for alerts in Celsius and Fahrenheit
-thermometer.registerListener((tempC, tempF) => {
-    console.log(`Threshold reached: ${tempC}°C / ${tempF}°F`);
-});
+// Example/demo runner (does not execute on import)
+export async function runDemo() {
+  // Create an instance of Thermometer
+  const thermometer = new Thermometer(externalTemperatureSource);
 
-// Simulate reading temperatures
-for (let i = 0; i < 10; i++) {
-    const currentTemp = thermometer.readTemperature(); // Get current temperature
-    // console.log(`Current Temperature: ${currentTemp}°C / ${thermometer.toFahrenheit(currentTemp)}°F`);
+  // add test thresholds (returns Threshold instances)
+  thermometer.addThreshold(0, 0.5, "both");
+  thermometer.addThreshold(100, 0.5, "both");
+
+  // Subscribe to raw readings
+  thermometer.on("reading", (v) => {
+    console.log(
+      `Reading: ${v}°C / ${thermometer.toFahrenheit(v).toFixed(1)}°F`
+    );
+  });
+
+  // Subscribe to threshold events (preferred API)
+  thermometer.on("threshold", (evt) => {
+    console.log(
+      `Threshold ${evt.threshold.alertTemp}°C (${evt.direction}) reached at ${evt.tempC}°C / ${evt.tempF.toFixed(1)}°F`
+    );
+  });
+
+  // For compatibility-like behavior, subscribe to the 'threshold' event
+  thermometer.on("threshold", (evt) => {
+    console.log(
+      `Listener: threshold ${evt.threshold.alertTemp}°C reached at ${evt.tempC}°C / ${evt.tempF.toFixed(1)}°F`
+    );
+  });
+
+  // Simulate reading temperatures sequentially
+  for (let i = 0; i < 10; i++) {
+    await thermometer.readTemperature(); // Get and emit current temperature
+  }
 }
+
+// demo runner not executed on import
