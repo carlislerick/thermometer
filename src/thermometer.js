@@ -1,9 +1,16 @@
-// Simulated external temperature source (fluctuating around 0°C)
 import { EventEmitter } from "events";
 
+/**
+ * Mock external temperature source function
+ * Simulates temperature readings for testing
+ * @returns {number} - Simulated temperature in Celsius
+ * @example
+ * const temp = externalTemperatureSource();
+ * console.log(`External Temperature: ${temp}°C`);
+ */
 const externalTemperatureSource = (() => {
   // testing for freezing point both up and down
-  const readings = [1.5, 1.0, 0.5, 0.0, -0.5, 0.0, -0.5, 0.0, 0.5, 0.0];
+  const readings = [1.5, null, 1.0, 0.5, 0.0, -0.5, 0.0, -0.5, 0.0, 0.5, 0.0];
   // testing for boiling point both up and down
   // const readings = [90, 95, 99, 100, 100.5, 100, 99, 100, 110, 100];
 
@@ -11,6 +18,12 @@ const externalTemperatureSource = (() => {
   return () => readings[i++ % readings.length];
 })();
 
+/**
+ * Class for defining temperature thresholds
+ * @param {*} alertTemp
+ * @param {*} fluctuation
+ * @param {*} direction
+ */
 class Threshold {
   constructor(alertTemp, fluctuation, direction) {
     const validDirections = ["up", "down", "both"];
@@ -35,13 +48,29 @@ class Threshold {
   }
 }
 
+/**
+ * Thermometer class to handle temperature
+ * readings and thresholds
+ * @param {*} externalTemperatureSource
+ * @param {*} thresholds
+ * @example
+ * const thermometer = new Thermometer(externalTemperatureSource);
+ * thermometer.addThreshold(new Threshold(0, 0.5, "both"));
+ * thermometer.on("threshold", (evt) => {
+ *   console.log(`Threshold reached: ${evt.tempC}°C`);
+ * });
+ * await thermometer.readTemperature();
+ */
 class Thermometer {
   constructor(externalTemperatureSource, thresholds = []) {
-    this.source = externalTemperatureSource; // Function to get temperature (sync or Promise)
-    this.currentTemp = null; // numeric current temperature (Celsius)
-    this.previousTemp = null; // Track the previous temperature (Celsius)
-    this.thresholds = Array.isArray(thresholds) ? thresholds.slice() : []; // Copy of thresholds array if provided
-    // legacy `listeners` removed; use `emitter` for subscriptions
+    // Function to get temperature (sync or Promise)
+    this.source = externalTemperatureSource;
+    // numeric current temperature (Celsius)
+    this.currentTemp = null;
+    // Track the previous temperature
+    this.previousTemp = null;
+    // Copy of thresholds array if provided
+    this.thresholds = Array.isArray(thresholds) ? thresholds.slice() : [];
 
     // validate threshold
     this.thresholds.forEach((thresh) => {
@@ -56,56 +85,105 @@ class Thermometer {
     this.emitter = new EventEmitter();
   }
 
-  // Register a listener for notifications
-  // Legacy listener API removed. Use `on('threshold', fn)` instead.
-
-  // Convert Celsius to Fahrenheit
+  /**
+   * Convert Celsius to Fahrenheit
+   * @param celsius {number} - Temperature in Celsius
+   * @returns {number} - Temperature in Fahrenheit
+   * @example
+   * const fahrenheit = thermometer.toFahrenheit(0);
+   * console.log(`0°C is ${fahrenheit}°F`);
+   */
   toFahrenheit(celsius) {
     return (celsius * 9) / 5 + 32;
   }
 
-  // Read the current temperature (supports sync or Promise) and check thresholds
-  async readTemperature() {
-    this.previousTemp = this.currentTemp;
-    try {
-      this.currentTemp = await Promise.resolve(this.source());
-    } catch (error) {
-      console.error(
-        `Error reading temperature: ${error && error.message ? error.message : error}`
-      );
-      return null;
+  /**
+   * Read temperature from the external source and
+   * update currentTemp
+   * @private
+   * @returns {number} - The current temperature in Celsius
+   * @throws {Error} - if promise fails
+   * @example
+   * const temp = await thermometer._readTemperature();
+   * console.log(`Current Temperature: ${temp}°C`);
+   */
+  async _readTemperature(maxRetries = 5) {
+    let temp;
+    let attempts = 0;
+
+    // Retry reading temperature until valid or max retries reached
+    while (attempts < maxRetries) {
+      attempts++;
+      // Get temperature from source
+      // (supports Promise or direct value)
+      try {
+        temp = await Promise.resolve(this.source());
+      } catch (error) {
+        // throw an error instead of returning invalid temp
+        throw new Error(`Temperature source error: ${error.message}`);
+      }
+      if (typeof temp === "number" && !Number.isNaN(temp)) {
+        this.previousTemp = this.currentTemp;
+        this.currentTemp = temp;
+        return this.currentTemp;
+      }
     }
 
-    if (typeof this.currentTemp !== "number" || Number.isNaN(this.currentTemp)) {
-      throw new Error("Invalid temperature reading: must be a number.");
-    }
-
-    this.emitter.emit("reading", this.currentTemp);
-
-    if (this.thresholds.length > 0) {
-      this.checkThresholds();
-    }
-
-    return this.currentTemp;
+    // If we reach here, no valid reading was received
+    throw new Error(
+      `No valid temperature reading after ${maxRetries} attempts.`
+    );
   }
 
-  // Check thresholds and notify listeners if reached
-  checkThresholds() {
+  /**
+   * get a new temp and Check all defined
+   * thresholds against the current
+   * temperature and call event emitter
+   * @throws {Error} - If no thresholds are defined
+   * @example
+   * thermometer.checkThresholds();
+   */
+  async checkThresholds() {
+    // notify if no thresholds are defined
     if (this.thresholds.length === 0) {
       throw new Error("No thresholds defined");
     }
+
+    // read a temperature from the source
+    const temp = await this._readTemperature();
+
+    // make sure we got a valid number, if not,
+    // skip this reading
+    if (typeof temp !== "number" || Number.isNaN(temp)) {
+      return null;
+    }
+
+    // go through each threshold and check temperature
     for (const threshold of this.thresholds) {
-      const withinFluctuation = this._isWithinFluctuation(this.currentTemp, threshold);
-      if (!threshold.reached && withinFluctuation && this._isThresholdReached(threshold)) {
+      // check if this temp is within the fluctuation
+      // range for the current threshold
+      const withinFluctuation = this._isWithinFluctuation(
+        this.currentTemp,
+        threshold
+      );
+      if (
+        !threshold.reached &&
+        withinFluctuation &&
+        this._isThresholdReached(threshold)
+      ) {
         this._handleThresholdReached(threshold, this.currentTemp);
       } else if (threshold.reached && !withinFluctuation) {
         threshold.reached = false;
       }
     }
-    // No need to update previousTemp here; handled in readTemperature
   }
 
-  // Helper method to check if the threshold has been reached based on direction
+  /**
+   * @private
+   * Determine if the threshold has been reached based on direction
+   * @param threshold {Threshold} - The threshold to check
+   * @returns {boolean} - True if threshold is reached, else false
+   */
   _isThresholdReached(threshold) {
     switch (threshold.direction) {
       case "down":
@@ -113,19 +191,37 @@ class Thermometer {
       case "up":
         return this.previousTemp < threshold.alertTemp;
       case "both":
-        return true;
+        // Trigger if the threshold was crossed in either direction
+        return (
+          (this.previousTemp < threshold.alertTemp &&
+            this.currentTemp >= threshold.alertTemp) ||
+          (this.previousTemp > threshold.alertTemp &&
+            this.currentTemp <= threshold.alertTemp)
+        );
       default:
         return false;
     }
   }
 
-  // Helper method to handle threshold crossing
+  /**
+   * @private
+   * Handle actions when a threshold is reached
+   * @param threshold {Threshold} - The threshold that was reached
+   * @param currentTemp {number} - Current temperature in Celsius
+   */
   _handleThresholdReached(threshold, currentTemp) {
     threshold.reached = true;
-    const event = this.createAlertEvent(currentTemp, threshold);
+    const event = this._createAlertEvent(currentTemp, threshold);
     this.emitter.emit("threshold", event);
   }
 
+  /**
+   * @private
+   * Check if current temperature is within the fluctuation range of the threshold
+   * @param currentTemp {number} - Current temperature in Celsius
+   * @param threshold {Threshold} - The threshold to check against
+   * @returns {boolean} - True if within fluctuation range, else false
+   */
   _isWithinFluctuation(currentTemp, threshold) {
     return (
       currentTemp <= threshold.alertTemp + threshold.fluctuation &&
@@ -133,31 +229,42 @@ class Thermometer {
     );
   }
 
-  // add a new threshold
-  addThreshold(alertTemp, fluctuation, direction) {
+  /**
+   * add a new threshold
+   * @param threshold {Threshold} Threshold instance
+   * @returns {Threshold} - The created Threshold instance
+   */
+  addThreshold(threshold) {
     // Support either passing a Threshold instance or numeric args
-    if (alertTemp instanceof Threshold) {
-      this.thresholds.push(alertTemp);
-      return alertTemp;
+    if (threshold instanceof Threshold) {
+      this.thresholds.push(threshold);
+      return threshold;
+    } else {
+      throw new Error(
+        "Invalid threshold format. Must be an instance of Threshold."
+      );
     }
-    const threshold = new Threshold(alertTemp, fluctuation, direction);
-    this.thresholds.push(threshold);
-    return threshold; // for testing purposes
   }
 
-  // Create an alert event object
-  createAlertEvent(currentTemp, threshold) {
+  /**
+   * @private
+   * Create an alert event object
+   * @param currentTemp {number} - Current temperature in Celsius
+   * @param threshold {Threshold} - The threshold that was reached
+   * @returns {object} - Alert event object
+   */
+  _createAlertEvent(currentTemp, threshold) {
     const event = {
       threshold,
       tempC: currentTemp,
       tempF: this.toFahrenheit(currentTemp),
       direction: threshold.direction,
     };
-    this.lastEvent = event; // helpful for tests
+
     return event;
   }
 
-  // EventEmitter convenience wrappers
+  // EventEmitter convenience wrappers used in Demo and tests
   on(eventName, listener) {
     this.emitter.on(eventName, listener);
   }
@@ -172,21 +279,26 @@ class Thermometer {
 // export classes for testing and external use
 export { Thermometer, Threshold, externalTemperatureSource };
 
-// Example/demo runner (does not execute on import)
+/**
+ * Demo function to showcase Thermometer usage
+ * with threshold events
+ * @example
+ * node -e "import('./src/thermometer.js').then(m=>m.runDemo())"
+ */
 export async function runDemo() {
   // Create an instance of Thermometer
   const thermometer = new Thermometer(externalTemperatureSource);
 
-  // add test thresholds (returns Threshold instances)
-  thermometer.addThreshold(0, 0.5, "both");
-  thermometer.addThreshold(100, 0.5, "both");
+  // add demo test thresholds (returns Threshold instances)
+  thermometer.addThreshold(new Threshold(0, 0.5, "both"));
+  thermometer.addThreshold(new Threshold(100, 0.5, "up"));
 
-  // Subscribe to raw readings
-  thermometer.on("reading", (v) => {
+  // enable to subscribe to raw readings
+  /*   thermometer.on("reading", (v) => {
     console.log(
       `Reading: ${v}°C / ${thermometer.toFahrenheit(v).toFixed(1)}°F`
     );
-  });
+  }); */
 
   // Subscribe to threshold events (preferred API)
   thermometer.on("threshold", (evt) => {
@@ -195,17 +307,8 @@ export async function runDemo() {
     );
   });
 
-  // For compatibility-like behavior, subscribe to the 'threshold' event
-  thermometer.on("threshold", (evt) => {
-    console.log(
-      `Listener: threshold ${evt.threshold.alertTemp}°C reached at ${evt.tempC}°C / ${evt.tempF.toFixed(1)}°F`
-    );
-  });
-
   // Simulate reading temperatures sequentially
   for (let i = 0; i < 10; i++) {
-    await thermometer.readTemperature(); // Get and emit current temperature
+    await thermometer.checkThresholds(); // Get and emit current temperature
   }
 }
-
-// demo runner not executed on import

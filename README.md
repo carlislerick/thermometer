@@ -5,7 +5,7 @@
 Run the demo (uses the event-driven API):
 
 ```bash
-node -e "import('./thermometer.js').then(m=>m.runDemo())"
+node -e "import('./src/thermometer.js').then(m=>m.runDemo())"
 ```
 
 Programmatic usage (ES modules):

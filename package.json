@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "mocha",
-    "coverage": "nyc npm test"
+    "coverage": "nyc npm run test"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +15,7 @@
     "@eslint/js": "^9.39.2",
     "chai": "^6.2.1",
     "eslint": "^9.39.2",
+    "esm": "^3.2.25",
     "globals": "^16.5.0",
     "jest": "^30.2.0",
     "mocha": "^11.7.5",
@@ -26,15 +27,15 @@
       "src/**/*.js",
       "lib/**/*"
     ],
-    "exclude": [
-      "**/*.test.js"
-    ],
     "reporter": [
       "text",
       "html"
     ],
     "all": true,
-    "cache": false
+    "cache": false,
+    "require": [
+      "esm"
+    ]
   },
   "dependencies": {
     "init": "^0.1.2"
