@@ -12,7 +12,9 @@
   "license": "ISC",
   "description": "",
   "devDependencies": {
+    "@eslint/css": "^0.14.1",
     "@eslint/js": "^9.39.2",
+    "@eslint/markdown": "^7.5.1",
     "chai": "^6.2.1",
     "eslint": "^9.39.2",
     "esm": "^3.2.25",
