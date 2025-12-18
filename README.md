@@ -2,9 +2,7 @@
 
 ## Comments
 
-```considered adding typing but felt runtime checks are appropriate for the scope.
-
-```
+considered adding typing but felt runtime checks are appropriate for the scope.
 
 ## Quick Usage
 
