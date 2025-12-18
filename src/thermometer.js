@@ -20,9 +20,9 @@ const externalTemperatureSource = (() => {
 
 /**
  * Class for defining temperature thresholds
- * @param {*} alertTemp
- * @param {*} fluctuation
- * @param {*} direction
+ * @param {number} alertTemp
+ * @param {number} fluctuation
+ * @param {string} direction
  */
 class Threshold {
   constructor(alertTemp, fluctuation, direction) {
@@ -51,15 +51,23 @@ class Threshold {
 /**
  * Thermometer class to handle temperature
  * readings and thresholds
- * @param {*} externalTemperatureSource
- * @param {*} thresholds
+ * @param {Function} externalTemperatureSource - Function to get temperature readings
+ * @param {Threshold[]} [thresholds=[]] - Optional array of Threshold instances
+ * @throws {Error} - If externalTemperatureSource is not a function
+ * Events:
+ * @event threshold
+ *   Emitted when a threshold is crossed.
+ *   Payload: {
+ *     threshold: Threshold, // The threshold that was crossed
+ *     tempC: number,        // Temperature in Celsius
+ *     tempF: number,        // Temperature in Fahrenheit
+ *     direction: string     // "up", "down", or "both"
+ *   }
+ *
  * @example
- * const thermometer = new Thermometer(externalTemperatureSource);
- * thermometer.addThreshold(new Threshold(0, 0.5, "both"));
- * thermometer.on("threshold", (evt) => {
- *   console.log(`Threshold reached: ${evt.tempC}°C`);
+ * thermometer.on("threshold", evt => {
+ *   console.log(`Threshold ${evt.threshold.alertTemp}°C reached at ${evt.tempC}°C`);
  * });
- * await thermometer.readTemperature();
  */
 class Thermometer {
   constructor(externalTemperatureSource, thresholds = []) {
@@ -71,6 +79,11 @@ class Thermometer {
     this.previousTemp = null;
     // Copy of thresholds array if provided
     this.thresholds = Array.isArray(thresholds) ? thresholds.slice() : [];
+
+    // validate source is a function
+    if (typeof externalTemperatureSource !== "function") {
+      throw new Error("externalTemperatureSource must be a function.");
+    }
 
     // validate threshold
     this.thresholds.forEach((thresh) => {
@@ -87,25 +100,26 @@ class Thermometer {
 
   /**
    * Convert Celsius to Fahrenheit
-   * @param celsius {number} - Temperature in Celsius
-   * @returns {number} - Temperature in Fahrenheit
+   * @param {number} celsius Temperature in Celsius
+   * @returns {number} Temperature in Fahrenheit
    * @example
    * const fahrenheit = thermometer.toFahrenheit(0);
    * console.log(`0°C is ${fahrenheit}°F`);
    */
   toFahrenheit(celsius) {
+    // don't test for valid number, happens in _readTemperature
     return (celsius * 9) / 5 + 32;
   }
 
   /**
    * Read temperature from the external source and
    * update currentTemp
+   * retries up to maxRetries times if invalid reading
    * @private
+   * @param {number} [maxRetries=5] - Maximum number of retry attempts for reading temperature
    * @returns {number} - The current temperature in Celsius
-   * @throws {Error} - if promise fails
-   * @example
-   * const temp = await thermometer._readTemperature();
-   * console.log(`Current Temperature: ${temp}°C`);
+   * @throws {Error} - if source fails
+   * @throws {Error} - if no valid reading after maxRetries
    */
   async _readTemperature(maxRetries = 5) {
     let temp;
@@ -140,8 +154,6 @@ class Thermometer {
    * thresholds against the current
    * temperature and call event emitter
    * @throws {Error} - If no thresholds are defined
-   * @example
-   * thermometer.checkThresholds();
    */
   async checkThresholds() {
     // notify if no thresholds are defined

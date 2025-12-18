@@ -8,6 +8,21 @@ import {
 // verify source is producing temps
 // TODO: remove this test once connected to live feed
 describe("External Thermometer Source", () => {
+  it("should throw an error if externalTemperatureSource is not a function", () => {
+    expect(() => new Thermometer(42)).to.throw(
+      "externalTemperatureSource must be a function."
+    );
+    expect(() => new Thermometer(null)).to.throw(
+      "externalTemperatureSource must be a function."
+    );
+    expect(() => new Thermometer({})).to.throw(
+      "externalTemperatureSource must be a function."
+    );
+    expect(() => new Thermometer(undefined)).to.throw(
+      "externalTemperatureSource must be a function."
+    );
+  });
+
   it("should return a temperature", () => {
     const temp = externalTemperatureSource();
     expect(temp).to.be.a("number");
@@ -31,7 +46,6 @@ describe("Threshold Class", () => {
 });
 
 describe("Thermometer Class", () => {
-
   let thermometer;
 
   // initialize Thermometer instance before each test
@@ -75,13 +89,15 @@ describe("Thermometer Class", () => {
       );
     });
 
-    it("should not throw error when thresholds are defined", async() => {
+    it("should not throw error when thresholds are defined", async () => {
       const threshold = new Threshold(0, 0.5, "both");
       thermometer.addThreshold(threshold);
       try {
         await thermometer.checkThresholds();
       } catch (err) {
-        throw new Error("No error should be thrown when thresholds are defined");
+        throw new Error(
+          "No error should be thrown when thresholds are defined"
+        );
       }
     });
 
@@ -169,7 +185,7 @@ describe("Thermometer Class", () => {
       thermometer._handleThresholdReached(threshold, 10);
     });
 
-        it("should skip null readings from the source", async () => {
+    it("should skip null readings from the source", async () => {
       // Create a source that returns null first, then a valid number
       let callCount = 0;
       const nullThenNumberSource = () => {
